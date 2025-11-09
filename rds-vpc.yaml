@@ -1,0 +1,201 @@
+# Description of what this change includes: 
+#   Added header metadata for documentation and version tracking + RDS parameters/resources.
+# Revision number: 1.1
+# Date: 2025-11-09
+
+# File: vpc-working.yaml
+AWSTemplateFormatVersion: "2010-09-09"
+Description: >
+  Creates a VPC in us-west-2 (with DNS support/hostnames), three public subnets
+  across us-west-2a/b/c, an Internet Gateway, and routing for internet access.
+  Adds an RDS MySQL instance with subnet group and security group.
+
+Parameters:
+  # --- RDS parameters (added) ---
+  DBName:
+    Type: String
+    Default: appdb
+    Description: Database name
+
+  DBUsername:
+    Type: String
+    Default: admin
+    Description: Master username
+
+  DBPassword:
+    Type: String
+    NoEcho: true
+    MinLength: 8
+    Description: Master user password (min 8 characters)
+
+  DBInstanceClass:
+    Type: String
+    Default: db.t3.micro
+    AllowedValues:
+      - db.t3.micro
+      - db.t3.small
+      - db.t3.medium
+    Description: Instance size for RDS
+
+Resources:
+  VPC:
+    Type: AWS::EC2::VPC
+    Properties:
+      CidrBlock: 10.20.0.0/16
+      EnableDnsSupport: true
+      EnableDnsHostnames: true
+      Tags:
+        - Key: Name
+          Value: VPC-Romgra8761
+
+  InternetGateway:
+    Type: AWS::EC2::InternetGateway
+    Properties:
+      Tags:
+        - Key: Name
+          Value: !Sub "${VPC}-igw"
+
+  VPCGatewayAttachment:
+    Type: AWS::EC2::VPCGatewayAttachment
+    Properties:
+      VpcId: !Ref VPC
+      InternetGatewayId: !Ref InternetGateway
+
+  PublicRouteTable:
+    Type: AWS::EC2::RouteTable
+    Properties:
+      VpcId: !Ref VPC
+      Tags:
+        - Key: Name
+          Value: !Sub "${VPC}-public-rtb"
+
+  DefaultRouteToInternet:
+    Type: AWS::EC2::Route
+    Properties:
+      RouteTableId: !Ref PublicRouteTable
+      DestinationCidrBlock: 0.0.0.0/0
+      GatewayId: !Ref InternetGateway
+    DependsOn: VPCGatewayAttachment
+
+  PublicSubnetAzA:
+    Type: AWS::EC2::Subnet
+    Properties:
+      VpcId: !Ref VPC
+      AvailabilityZone: us-west-2a
+      CidrBlock: 10.20.0.0/20
+      MapPublicIpOnLaunch: true
+      Tags:
+        - Key: Name
+          Value: PublicSubnet-us-west-2a
+
+  PublicSubnetAzB:
+    Type: AWS::EC2::Subnet
+    Properties:
+      VpcId: !Ref VPC
+      AvailabilityZone: us-west-2b
+      CidrBlock: 10.20.16.0/20
+      MapPublicIpOnLaunch: true
+      Tags:
+        - Key: Name
+          Value: PublicSubnet-us-west-2b
+
+  PublicSubnetAzC:
+    Type: AWS::EC2::Subnet
+    Properties:
+      VpcId: !Ref VPC
+      AvailabilityZone: us-west-2c
+      CidrBlock: 10.20.32.0/20
+      MapPublicIpOnLaunch: true
+      Tags:
+        - Key: Name
+          Value: PublicSubnet-us-west-2c
+
+  SubnetAzAtoPublicRTAssociation:
+    Type: AWS::EC2::SubnetRouteTableAssociation
+    Properties:
+      SubnetId: !Ref PublicSubnetAzA
+      RouteTableId: !Ref PublicRouteTable
+
+  SubnetAzBtoPublicRTAssociation:
+    Type: AWS::EC2::SubnetRouteTableAssociation
+    Properties:
+      SubnetId: !Ref PublicSubnetAzB
+      RouteTableId: !Ref PublicRouteTable
+
+  SubnetAzCtoPublicRTAssociation:
+    Type: AWS::EC2::SubnetRouteTableAssociation
+    Properties:
+      SubnetId: !Ref PublicSubnetAzC
+      RouteTableId: !Ref PublicRouteTable
+
+  # --- RDS resources (added) ---
+  RdsSubnetGroup:
+    Type: AWS::RDS::DBSubnetGroup
+    Properties:
+      DBSubnetGroupDescription: Subnets for RDS
+      SubnetIds:
+        - !Ref PublicSubnetAzA     # swap to private subnets later if you add them
+        - !Ref PublicSubnetAzB
+
+  RdsSecurityGroup:
+    Type: AWS::EC2::SecurityGroup
+    Properties:
+      GroupDescription: Allow MySQL traffic inside the VPC
+      VpcId: !Ref VPC
+      SecurityGroupIngress:
+        - IpProtocol: tcp
+          FromPort: 3306
+          ToPort: 3306
+          CidrIp: !GetAtt VPC.CidrBlock   # allow access from inside the VPC CIDR
+      Tags:
+        - Key: Name
+          Value: RDS-MySQL-SG
+
+  RdsInstance:
+    Type: AWS::RDS::DBInstance
+    Properties:
+      Engine: mysql
+      DBName: !Ref DBName
+      MasterUsername: !Ref DBUsername
+      MasterUserPassword: !Ref DBPassword
+      DBInstanceClass: !Ref DBInstanceClass
+      AllocatedStorage: 20
+      StorageType: gp3
+      PubliclyAccessible: false
+      VPCSecurityGroups:
+        - !Ref RdsSecurityGroup
+      DBSubnetGroupName: !Ref RdsSubnetGroup
+      MultiAZ: false
+      BackupRetentionPeriod: 1
+      DeletionProtection: false
+
+Outputs:
+  VpcId:
+    Description: The ID of the created VPC
+    Value: !Ref VPC
+    Export:
+      Name: !Sub "${AWS::StackName}-VpcId"
+
+  VpcCidrBlock:
+    Description: The CIDR block of the VPC (example of !GetAtt usage)
+    Value: !GetAtt VPC.CidrBlock
+
+  SubnetIds:
+    Description: Comma-separated list of public subnet IDs (us-west-2a,b,c)
+    Value: !Join
+      - ","
+      - - !Ref PublicSubnetAzA
+        - !Ref PublicSubnetAzB
+        - !Ref PublicSubnetAzC
+    Export:
+      Name: !Sub "${AWS::StackName}-SubnetIds"
+
+  InternetGatewayId:
+    Description: The ID of the Internet Gateway
+    Value: !Ref InternetGateway
+    Export:
+      Name: !Sub "${AWS::StackName}-InternetGatewayId"
+
+  RdsEndpoint:
+    Description: RDS endpoint address
+    Value: !GetAtt RdsInstance.Endpoint.Address
